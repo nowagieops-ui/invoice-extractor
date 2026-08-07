@@ -1,8 +1,0 @@
-{
-  "name": "invoice-extractor",
-  "version": "1.0.0",
-  "scripts": {
-    "build": "pip3 install -r requirements.txt",
-    "start": "gunicorn app:app --bind 0.0.0.0:$PORT"
-  }
-}
