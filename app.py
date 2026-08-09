@@ -156,100 +156,72 @@ def append_to_tracker(ws, wb, data: dict, row_index: int):
     wb.save(EXCEL_FILE)
 
 # ── AI extraction ──────────────────────────────────────────────────────────
-AI_PROMPT = """You are processing a Belemaoil Invoice Approval Form PDF.
-Extract ALL of the following fields and return ONLY valid JSON (no markdown).
-
-The PDF may contain multiple monthly invoices from the same vendor (Jan-June etc).
-Return a JSON ARRAY — one object per invoice/approval form found.
-
-Each object must have these keys:
-{
-  "vendor": "full vendor/company name",
-  "invoice_number": "invoice number(s) e.g. TGSL/BPL/KULA/01/2026",
-  "invoice_date": "date on invoice DD/MM/YYYY",
-  "po_so": "PO or SO number e.g. BPL055C25-0104.05",
-  "form_number": "form number if present e.g. 26-184",
-  "invoice_amount": "total invoice amount as number string",
-  "received_finance": "date received by finance DD/MM/YYYY",
-  "invoice_period": "e.g. JANUARY 2026",
-
-  "budget_holder_name": "name",
-  "budget_holder_date": "DD/MM/YYYY",
-  "budget_holder_status": "APPROVED or REJECTED or PENDING",
-
-  "audit_name": "name",
-  "audit_date": "DD/MM/YYYY",
-  "audit_status": "APPROVED or REJECTED or PENDING",
-
-  "cost_control_name": "name",
-  "cost_control_date": "DD/MM/YYYY",
-  "cost_control_status": "APPROVED or REJECTED or PENDING",
-
-  "gm_finance_name": "name",
-  "gm_finance_date": "DD/MM/YYYY",
-  "gm_finance_status": "APPROVED or REJECTED or PENDING",
-
-  "rejection_reason": "reason text if rejected, else null"
-}
-
-Rules:
-- If a field is blank/unsigned in the document, use null
-- Status must be exactly: APPROVED, REJECTED, or PENDING
-- Dates in DD/MM/YYYY format
-- If you find multiple invoices/months, return multiple objects in the array
-- Never guess — only extract what is clearly shown"""
-
 def extract_with_ai(pdf_text: str) -> list:
     client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY", ""))
-    response = client.models.generate_content(
+
+    prompt = """Extract invoice approval data from this PDF and return ONLY a JSON array.
+No markdown, no explanation, just the raw JSON array.
+
+Each element must have these exact keys (use null for missing values):
+vendor, invoice_number, invoice_date, po_so, invoice_amount,
+received_finance, invoice_period,
+budget_holder_name, budget_holder_date, budget_holder_status,
+audit_name, audit_date, audit_status,
+cost_control_name, cost_control_date, cost_control_status,
+gm_finance_name, gm_finance_date, gm_finance_status,
+rejection_reason
+
+Rules:
+- Status fields must be exactly: APPROVED, REJECTED, or PENDING
+- Dates in DD/MM/YYYY format only
+- If signed and dated = APPROVED, if blank = PENDING, if crossed out = REJECTED
+- For invoice_date use the last day of the service period if no date shown (e.g. 28/02/2026 for February 2026)
+- Return an array always, even for one invoice
+
+PDF TEXT:
+""" + pdf_text[:5000]
+
+    def clean_and_parse(raw):
+        raw = raw.strip()
+        raw = re.sub(r"^```json\s*|^```\s*|\s*```$", "", raw).strip()
+        for pattern in [r'\[.*\]', r'\{.*\}']:
+            m = re.search(pattern, raw, re.DOTALL)
+            if m:
+                try:
+                    r = json.loads(m.group(0))
+                    return [r] if isinstance(r, dict) else r
+                except Exception:
+                    pass
+        try:
+            r = json.loads(raw)
+            return [r] if isinstance(r, dict) else r
+        except Exception:
+            return None
+
+    # First attempt
+    resp = client.models.generate_content(
         model="gemini-3.5-flash",
-        contents=f"{AI_PROMPT}\n\nPDF TEXT:\n{pdf_text[:6000]}",
-        config=gtypes.GenerateContentConfig(
-            temperature=0.1,
-            max_output_tokens=2000,
-        )
+        contents=prompt,
+        config=gtypes.GenerateContentConfig(temperature=0, max_output_tokens=2000)
     )
-    raw = response.text.strip()
+    result = clean_and_parse(resp.text)
+    if result:
+        return result
 
-    # Strip markdown fences
-    raw = re.sub(r"^```json\s*", "", raw)
-    raw = re.sub(r"^```\s*", "", raw)
-    raw = re.sub(r"\s*```$", "", raw)
-    raw = raw.strip()
+    # Second attempt — give Gemini an example to follow
+    example = '[{"vendor":"TRAMATHY GLOBAL SERVICES LIMITED","invoice_number":"TGSL/BPL/KULA/02/2026","invoice_date":"28/02/2026","po_so":"BPL055C25-0104.05","invoice_amount":"3154775","received_finance":"02/03/2026","invoice_period":"FEBRUARY 2026","budget_holder_name":"SAMUEL ABEL-JUMBO","budget_holder_date":"04/08/2026","budget_holder_status":"APPROVED","audit_name":"BEN OKOH","audit_date":"06/08/2026","audit_status":"APPROVED","cost_control_name":null,"cost_control_date":null,"cost_control_status":"PENDING","gm_finance_name":null,"gm_finance_date":null,"gm_finance_status":"PENDING","rejection_reason":null}]'
+    prompt2 = f"Return a JSON array like this example:\n{example}\n\nNow extract from this invoice text. Return ONLY the JSON array:\n{pdf_text[:3000]}"
+    resp2 = client.models.generate_content(
+        model="gemini-3.5-flash",
+        contents=prompt2,
+        config=gtypes.GenerateContentConfig(temperature=0, max_output_tokens=1500)
+    )
+    result2 = clean_and_parse(resp2.text)
+    if result2:
+        return result2
 
-    # Try to extract JSON array or object from the response
-    # Find first [ or { and last ] or }
-    arr_match = re.search(r'\[.*\]', raw, re.DOTALL)
-    obj_match = re.search(r'\{.*\}', raw, re.DOTALL)
+    raise ValueError(f"Could not parse Gemini response. Raw: {resp2.text[:300]}")
 
-    if arr_match:
-        raw = arr_match.group(0)
-    elif obj_match:
-        raw = obj_match.group(0)
-
-    try:
-        result = json.loads(raw)
-    except json.JSONDecodeError:
-        # Last resort: ask Gemini again with stricter prompt
-        response2 = client.models.generate_content(
-            model="gemini-3.5-flash",
-            contents=f"Return ONLY a valid JSON array with one object. No explanation, no markdown.\n\nExtract from this invoice text:\n{pdf_text[:3000]}\n\nJSON keys needed: vendor, invoice_number, po_so, invoice_date, received_finance, invoice_period, budget_holder_name, budget_holder_date, budget_holder_status, audit_name, audit_date, audit_status, cost_control_name, cost_control_date, cost_control_status, gm_finance_name, gm_finance_date, gm_finance_status, rejection_reason",
-            config=gtypes.GenerateContentConfig(temperature=0, max_output_tokens=1000)
-        )
-        raw2 = response2.text.strip()
-        raw2 = re.sub(r"^```json\s*|^```\s*|\s*```$", "", raw2).strip()
-        arr2 = re.search(r'\[.*\]', raw2, re.DOTALL)
-        obj2 = re.search(r'\{.*\}', raw2, re.DOTALL)
-        if arr2:
-            result = json.loads(arr2.group(0))
-        elif obj2:
-            result = json.loads(obj2.group(0))
-        else:
-            raise ValueError(f"Gemini could not return valid JSON. Raw response: {raw2[:200]}")
-
-    if isinstance(result, dict):
-        result = [result]
-    return result
 
 # ── PDF text extraction ────────────────────────────────────────────────────
 def extract_pdf_text(filepath: str) -> str:
@@ -276,17 +248,33 @@ def save_processed(ids: set):
         json.dump(list(ids), f)
 
 # ── Outlook IMAP fetch ─────────────────────────────────────────────────────
-def fetch_outlook_pdfs(email_addr, password, server, limit, folder="INBOX"):
+def fetch_outlook_pdfs(email_addr, password, server, limit, folder="INBOX", sender_filter="", date_from=""):
     results = []
     debug = []
     mail = imaplib.IMAP4_SSL(server, 993)
     mail.login(email_addr, password)
     mail.select(folder)
 
-    _, data = mail.search(None, 'ALL')
+    # Build IMAP search criteria
+    search_parts = []
+    if sender_filter.strip():
+        search_parts.append(f'FROM "{sender_filter.strip()}"')
+    if date_from.strip():
+        try:
+            # date_from comes in as YYYY-MM-DD from the HTML date input
+            dt = datetime.strptime(date_from.strip(), "%Y-%m-%d")
+            imap_date = dt.strftime("%d-%b-%Y")  # e.g. 01-Aug-2026
+            search_parts.append(f'SINCE {imap_date}')
+        except ValueError:
+            debug.append(f"⚠️ Invalid date format ignored: {date_from}")
+
+    search_criteria = " ".join(search_parts) if search_parts else "ALL"
+    debug.append(f"Search criteria: {search_criteria}")
+
+    _, data = mail.search(None, search_criteria)
     all_ids = data[0].split()
     ids = all_ids[-limit:]
-    debug.append(f"Total emails in inbox: {len(all_ids)} | Scanning last: {len(ids)}")
+    debug.append(f"Emails matching search: {len(all_ids)} | Scanning last: {len(ids)}")
 
     processed = load_processed()
     debug.append(f"Already processed (skipping): {len(processed)}")
@@ -299,8 +287,8 @@ def fetch_outlook_pdfs(email_addr, password, server, limit, folder="INBOX"):
             continue
 
         _, msg_data = mail.fetch(msg_id, "(RFC822)")
-        raw = msg_data[0][1]
-        msg = email.message_from_bytes(raw)
+        raw_bytes = msg_data[0][1]
+        msg = email.message_from_bytes(raw_bytes)
 
         subj_raw, enc = decode_header(msg.get("Subject",""))[0]
         subject = subj_raw.decode(enc or "utf-8") if isinstance(subj_raw, bytes) else str(subj_raw)
@@ -314,12 +302,12 @@ def fetch_outlook_pdfs(email_addr, password, server, limit, folder="INBOX"):
                 fname_raw, fenc = decode_header(fn)[0]
                 fname = fname_raw.decode(fenc or "utf-8") if isinstance(fname_raw, bytes) else str(fname_raw)
                 save_path = os.path.join(UPLOAD_FOLDER, f"{uid}_{fname}")
-                with open(save_path, "wb") as f:
-                    f.write(part.get_payload(decode=True))
+                with open(save_path, "wb") as f_out:
+                    f_out.write(part.get_payload(decode=True))
                 pdfs_found.append({"path": save_path, "name": fname})
 
         if pdfs_found:
-            debug.append(f"FOUND: {subject[:55]} -> {[p['name'] for p in pdfs_found]}")
+            debug.append(f"✅ From: {sender[:40]} | {subject[:40]} | PDFs: {[p['name'] for p in pdfs_found]}")
             results.append({
                 "msg_id": uid,
                 "subject": subject,
@@ -328,18 +316,18 @@ def fetch_outlook_pdfs(email_addr, password, server, limit, folder="INBOX"):
                 "pdfs": pdfs_found
             })
         else:
-            debug.append(f"SKIP: {subject[:55]} -> no PDFs")
+            debug.append(f"⬜ {subject[:50]} — no PDF attachments")
 
     if skipped_processed:
-        debug.append(f"Already processed: {skipped_processed} emails skipped")
-    debug.append(f"Emails with PDFs: {len(results)}")
+        debug.append(f"ℹ️ Skipped {skipped_processed} already-processed emails")
+    debug.append(f"📄 Emails with PDFs ready: {len(results)}")
 
     mail.logout()
     return results, processed, debug
 
 # ── Core processing pipeline ───────────────────────────────────────────────
-def process_emails(email_addr, password, server="outlook.office365.com", limit=20):
-    emails, processed, debug = fetch_outlook_pdfs(email_addr, password, server, limit)
+def process_emails(email_addr, password, server="imap.gmail.com", limit=20, sender_filter="", date_from=""):
+    emails, processed, debug = fetch_outlook_pdfs(email_addr, password, server, limit, sender_filter=sender_filter, date_from=date_from)
     wb, ws = get_or_create_workbook()
 
     # Find next available row
@@ -439,16 +427,18 @@ def index():
 @app.route("/fetch-email", methods=["POST"])
 def fetch_email():
     payload = request.get_json()
-    email_addr = payload.get("email","").strip()
-    password   = payload.get("password","")
-    server     = payload.get("server","outlook.office365.com")
-    limit      = int(payload.get("limit", 20))
+    email_addr    = payload.get("email","").strip()
+    password      = payload.get("password","")
+    server        = payload.get("server","imap.gmail.com")
+    limit         = int(payload.get("limit", 20))
+    sender_filter = payload.get("sender_filter","").strip()
+    date_from     = payload.get("date_from","").strip()
 
     if not email_addr or not password:
         return jsonify({"error": "Email and password required"}), 400
 
     try:
-        summary, debug = process_emails(email_addr, password, server, limit)
+        summary, debug = process_emails(email_addr, password, server, limit, sender_filter=sender_filter, date_from=date_from)
     except Exception as e:
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
