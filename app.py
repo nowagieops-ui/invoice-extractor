@@ -278,19 +278,24 @@ def save_processed(ids: set):
 # ── Outlook IMAP fetch ─────────────────────────────────────────────────────
 def fetch_outlook_pdfs(email_addr, password, server, limit, folder="INBOX"):
     results = []
+    debug = []
     mail = imaplib.IMAP4_SSL(server, 993)
     mail.login(email_addr, password)
     mail.select(folder)
 
     _, data = mail.search(None, 'ALL')
-    ids = data[0].split()
-    ids = ids[-limit:]   # most recent N
+    all_ids = data[0].split()
+    ids = all_ids[-limit:]
+    debug.append(f"Total emails in inbox: {len(all_ids)} | Scanning last: {len(ids)}")
 
     processed = load_processed()
+    debug.append(f"Already processed (skipping): {len(processed)}")
 
+    skipped_processed = 0
     for msg_id in reversed(ids):
         uid = msg_id.decode()
         if uid in processed:
+            skipped_processed += 1
             continue
 
         _, msg_data = mail.fetch(msg_id, "(RFC822)")
@@ -304,8 +309,9 @@ def fetch_outlook_pdfs(email_addr, password, server, limit, folder="INBOX"):
 
         pdfs_found = []
         for part in msg.walk():
-            if part.get_content_type() == "application/pdf":
-                fname_raw, fenc = decode_header(part.get_filename() or "attachment.pdf")[0]
+            fn = part.get_filename() or ""
+            if fn.lower().endswith(".pdf"):
+                fname_raw, fenc = decode_header(fn)[0]
                 fname = fname_raw.decode(fenc or "utf-8") if isinstance(fname_raw, bytes) else str(fname_raw)
                 save_path = os.path.join(UPLOAD_FOLDER, f"{uid}_{fname}")
                 with open(save_path, "wb") as f:
@@ -313,6 +319,7 @@ def fetch_outlook_pdfs(email_addr, password, server, limit, folder="INBOX"):
                 pdfs_found.append({"path": save_path, "name": fname})
 
         if pdfs_found:
+            debug.append(f"FOUND: {subject[:55]} -> {[p['name'] for p in pdfs_found]}")
             results.append({
                 "msg_id": uid,
                 "subject": subject,
@@ -320,9 +327,15 @@ def fetch_outlook_pdfs(email_addr, password, server, limit, folder="INBOX"):
                 "date": date_str,
                 "pdfs": pdfs_found
             })
+        else:
+            debug.append(f"SKIP: {subject[:55]} -> no PDFs")
+
+    if skipped_processed:
+        debug.append(f"Already processed: {skipped_processed} emails skipped")
+    debug.append(f"Emails with PDFs: {len(results)}")
 
     mail.logout()
-    return results, processed
+    return results, processed, debug
 
 # ── Core processing pipeline ───────────────────────────────────────────────
 def process_emails(email_addr, password, server="outlook.office365.com", limit=20):
