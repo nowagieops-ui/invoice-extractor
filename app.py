@@ -212,11 +212,14 @@ PDF TEXT:
         except Exception:
             return None
 
-    # First attempt
+    # First attempt — force native JSON output so the model can't wrap it in
+    # prose/markdown, and give it enough headroom to avoid mid-object truncation
     resp = client.models.generate_content(
         model="gemini-3.5-flash",
         contents=prompt,
-        config=gtypes.GenerateContentConfig(temperature=0, max_output_tokens=2000)
+        config=gtypes.GenerateContentConfig(
+            temperature=0, max_output_tokens=4000, response_mime_type="application/json"
+        )
     )
     result = clean_and_parse(resp.text)
     if result:
@@ -228,7 +231,9 @@ PDF TEXT:
     resp2 = client.models.generate_content(
         model="gemini-3.5-flash",
         contents=prompt2,
-        config=gtypes.GenerateContentConfig(temperature=0, max_output_tokens=1500)
+        config=gtypes.GenerateContentConfig(
+            temperature=0, max_output_tokens=3000, response_mime_type="application/json"
+        )
     )
     result2 = clean_and_parse(resp2.text)
     if result2:
@@ -315,8 +320,14 @@ def fetch_outlook_pdfs(email_addr, password, server, limit, folder="INBOX", send
         date_str= msg.get("Date","")
 
         pdfs_found = []
+        part_info = []
         for part in msg.walk():
             fn = part.get_filename() or ""
+            ctype = part.get_content_type()
+            disp = part.get("Content-Disposition", "")
+            if not fn and ctype not in ("multipart/mixed", "multipart/alternative",
+                                         "multipart/related", "text/plain", "text/html"):
+                part_info.append(f"{ctype}{'/'+disp.split(';')[0] if disp else ''}")
             if fn.lower().endswith(".pdf"):
                 fname_raw, fenc = decode_header(fn)[0]
                 fname = fname_raw.decode(fenc or "utf-8") if isinstance(fname_raw, bytes) else str(fname_raw)
@@ -324,6 +335,8 @@ def fetch_outlook_pdfs(email_addr, password, server, limit, folder="INBOX", send
                 with open(save_path, "wb") as f_out:
                     f_out.write(part.get_payload(decode=True))
                 pdfs_found.append({"path": save_path, "name": fname})
+            elif fn:
+                part_info.append(f"non-pdf file: {fn}")
 
         if pdfs_found:
             debug.append(f"✅ From: {sender[:40]} | {subject[:40]} | PDFs: {[p['name'] for p in pdfs_found]}")
@@ -335,7 +348,8 @@ def fetch_outlook_pdfs(email_addr, password, server, limit, folder="INBOX", send
                 "pdfs": pdfs_found
             })
         else:
-            debug.append(f"⬜ {subject[:50]} — no PDF attachments")
+            extra = f" | other parts: {part_info}" if part_info else " | no attachment-like parts at all"
+            debug.append(f"⬜ {subject[:50]} — no PDF attachments{extra}")
 
     if skipped_processed:
         debug.append(f"ℹ️ Skipped {skipped_processed} already-processed emails")
