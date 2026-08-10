@@ -258,13 +258,18 @@ def fetch_outlook_pdfs(email_addr, password, server, limit, folder="INBOX", send
     # Build IMAP search criteria
     search_parts = []
     if sender_filter.strip():
-        search_parts.append(f'FROM "{sender_filter.strip()}"')
+        # Use just the domain or local part to avoid case/display-name issues
+        sf_clean = sender_filter.strip().lower()
+        # Extract just the local part before @ for broader matching
+        local_part = sf_clean.split("@")[0] if "@" in sf_clean else sf_clean
+        search_parts.append(f'FROM "{local_part}"')
+        debug.append(f"Sender filter: searching for '{local_part}' in From field")
     if date_from.strip():
         try:
-            # date_from comes in as YYYY-MM-DD from the HTML date input
             dt = datetime.strptime(date_from.strip(), "%Y-%m-%d")
-            imap_date = dt.strftime("%d-%b-%Y")  # e.g. 01-Aug-2026
+            imap_date = dt.strftime("%d-%b-%Y")
             search_parts.append(f'SINCE {imap_date}')
+            debug.append(f"Date filter: emails since {imap_date}")
         except ValueError:
             debug.append(f"⚠️ Invalid date format ignored: {date_from}")
 
