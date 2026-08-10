@@ -442,6 +442,11 @@ def fetch_email():
     if not email_addr or not password:
         return jsonify({"error": "Email and password required"}), 400
 
+    # Cap limit to avoid timeout on Render free tier (30s request limit)
+    # Each email takes ~0.5s to fetch, so 50 is safe
+    if limit > 200:
+        limit = 200
+
     try:
         summary, debug = process_emails(email_addr, password, server, limit, sender_filter=sender_filter, date_from=date_from)
     except Exception as e:
