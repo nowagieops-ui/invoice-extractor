@@ -183,15 +183,29 @@ PDF TEXT:
 
     def clean_and_parse(raw):
         raw = raw.strip()
-        raw = re.sub(r"^```json\s*|^```\s*|\s*```$", "", raw).strip()
-        for pattern in [r'\[.*\]', r'\{.*\}']:
-            m = re.search(pattern, raw, re.DOTALL)
-            if m:
-                try:
-                    r = json.loads(m.group(0))
-                    return [r] if isinstance(r, dict) else r
-                except Exception:
-                    pass
+        # Remove ALL markdown code fences anywhere in the string
+        raw = raw.replace("```json", "").replace("```JSON", "").replace("```", "")
+        raw = raw.strip()
+        # Find outermost JSON by locating first [ or { and last ] or }
+        start_arr = raw.find("[")
+        start_obj = raw.find("{")
+        end_arr   = raw.rfind("]")
+        end_obj   = raw.rfind("}")
+        # Try JSON array first
+        if start_arr != -1 and end_arr != -1 and start_arr < end_arr:
+            try:
+                r = json.loads(raw[start_arr:end_arr+1])
+                return [r] if isinstance(r, dict) else r
+            except Exception:
+                pass
+        # Try JSON object
+        if start_obj != -1 and end_obj != -1 and start_obj < end_obj:
+            try:
+                r = json.loads(raw[start_obj:end_obj+1])
+                return [r] if isinstance(r, dict) else r
+            except Exception:
+                pass
+        # Last resort full text
         try:
             r = json.loads(raw)
             return [r] if isinstance(r, dict) else r
