@@ -103,7 +103,7 @@
     <p class="section-label">Advanced</p>
     <div class="form-grid">
       <div class="grp"><label>IMAP Server</label><input id="srv" value="imap.gmail.com"/></div>
-      <div class="grp"><label>Max Emails to Scan</label><input id="lim" type="number" value="50" min="1" max="500"/></div>
+      <div class="grp"><label>Max Emails to Scan <span style="font-weight:400;color:#718096">(max 200)</span></label><input id="lim" type="number" value="50" min="1" max="200"/></div>
     </div>
 
     <button class="btn btn-green" id="fetchBtn" onclick="fetchEmails()">
@@ -167,6 +167,7 @@ async function fetchEmails() {
   const snd=document.getElementById("snd").value.trim();
   const dtf=document.getElementById("dtf").value;
   if(!eml||!pwd){alert("Please enter email and password");return;}
+  if(parseInt(lim)>200){document.getElementById("lim").value=200; alert("Max 200 emails per scan to avoid timeout. Use the date filter to narrow results instead.");}
   setLoading("fetchBtn","fetchSpinner","fetchLabel",true);
   const box=document.getElementById("result"); box.style.display="none";
   try {
