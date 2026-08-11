@@ -171,10 +171,14 @@ async function fetchEmails() {
   setLoading("fetchBtn","fetchSpinner","fetchLabel",true);
   const box=document.getElementById("result"); box.style.display="none";
   try {
-    const j = await (await fetch("/fetch-email",{
+    const resp = await fetch("/fetch-email",{
       method:"POST", headers:{"Content-Type":"application/json"},
       body:JSON.stringify({email:eml,password:pwd,server:srv,limit:lim,sender_filter:snd,date_from:dtf})
-    })).json();
+    });
+    if(!resp.ok && !(resp.headers.get("content-type")||"").includes("application/json")){
+      throw new Error(`Server timed out or errored (HTTP ${resp.status}). Try scanning fewer emails or narrowing the date range.`);
+    }
+    const j = await resp.json();
     box.style.display="block";
     if(j.error){box.innerHTML=`<div class="r-item r-err"><strong>❌ ${j.error}</strong></div>`;return;}
     const ok=j.processed||[], skip=j.skipped||[], dbg=j.debug||[];
