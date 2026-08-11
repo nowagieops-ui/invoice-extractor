@@ -132,6 +132,19 @@
     <div id="upResult"></div>
   </div>
 
+  <div class="card">
+    <h2>🔄 Restore Tracker</h2>
+    <p class="sub">This server's storage doesn't persist across deploys. If your tracked invoices ever disappear, download a backup regularly (⬇ Download in the nav bar) and restore it here.</p>
+    <div class="form-full">
+      <div class="grp"><input type="file" id="trFile" accept=".xlsx"/></div>
+    </div>
+    <button class="btn btn-blue" id="trBtn" disabled onclick="restoreTracker()">
+      <span id="trSpinner" style="display:none"><span class="spin-icon">⏳</span></span>
+      <span id="trLabel">🔄 Restore from File</span>
+    </button>
+    <div id="trResult"></div>
+  </div>
+
 </main>
 <script>
 const dz = document.getElementById("dz"), fi = document.getElementById("fi");
@@ -161,6 +174,29 @@ async function uploadFile() {
     document.getElementById("upResult").innerHTML=`<div class="r-item r-err">❌ ${e.message}</div>`;
     document.getElementById("upResult").style.display="block";
   } finally { setLoading("upBtn","upSpinner","upLabel",false); }
+}
+
+const trFile = document.getElementById("trFile");
+let selTrFile = null;
+trFile.addEventListener("change", () => {
+  selTrFile = trFile.files[0] || null;
+  document.getElementById("trBtn").disabled = !selTrFile;
+});
+async function restoreTracker() {
+  if (!selTrFile) return;
+  if (!confirm("This replaces the current tracker with the uploaded file. Continue?")) return;
+  setLoading("trBtn","trSpinner","trLabel",true);
+  const form = new FormData(); form.append("tracker", selTrFile);
+  const box = document.getElementById("trResult"); box.style.display="block";
+  try {
+    const j = await (await fetch("/upload-tracker",{method:"POST",body:form})).json();
+    box.innerHTML = j.error
+      ? `<div class="r-item r-err"><strong>❌ ${j.error}</strong></div>`
+      : `<div class="r-item r-ok"><strong>✅ Restored — ${j.row_count} invoice${j.row_count!==1?'s':''} loaded</strong></div>`;
+    if (j.success) setTimeout(() => location.reload(), 1200);
+  } catch(e) {
+    box.innerHTML = `<div class="r-item r-err">❌ ${e.message}</div>`;
+  } finally { setLoading("trBtn","trSpinner","trLabel",false); }
 }
 // Restore remembered credentials on load
 (function(){

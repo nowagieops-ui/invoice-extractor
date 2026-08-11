@@ -563,6 +563,36 @@ def upload_pdf():
     return jsonify({"success": True, "added": added, "count": len(added)})
 
 
+@app.route("/upload-tracker", methods=["POST"])
+def upload_tracker():
+    """Restore the tracker workbook from a previously downloaded backup —
+    a stopgap since this host's disk doesn't persist across deploys."""
+    if "tracker" not in request.files:
+        return jsonify({"error": "No file"}), 400
+    file = request.files["tracker"]
+    if not file.filename.lower().endswith(".xlsx"):
+        return jsonify({"error": "Please upload an .xlsx file"}), 400
+
+    tmp_path = EXCEL_FILE + ".upload"
+    file.save(tmp_path)
+    try:
+        wb = openpyxl.load_workbook(tmp_path)
+    except Exception as e:
+        os.remove(tmp_path)
+        return jsonify({"error": f"Not a valid Excel file: {e}"}), 400
+    if "INVOICE" not in wb.sheetnames:
+        os.remove(tmp_path)
+        return jsonify({"error": "This file has no 'INVOICE' sheet — is it the right tracker file?"}), 400
+
+    if os.path.exists(EXCEL_FILE):
+        shutil.copy(EXCEL_FILE, EXCEL_FILE + ".bak")
+    shutil.move(tmp_path, EXCEL_FILE)
+
+    ws = wb["INVOICE"]
+    row_count = max(0, ws.max_row - 4)
+    return jsonify({"success": True, "row_count": row_count})
+
+
 @app.route("/preview")
 def preview():
     rows = []
