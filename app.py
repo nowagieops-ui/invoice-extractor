@@ -7,6 +7,10 @@ import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from google import genai
 from google.genai import types as gtypes
+import pymupdf
+import pytesseract
+from PIL import Image
+import io
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "change-this-in-production")
@@ -243,6 +247,19 @@ PDF TEXT:
 
 
 # ── PDF text extraction ────────────────────────────────────────────────────
+def extract_pdf_text_ocr(filepath: str) -> str:
+    """Fallback for scanned/image-only PDFs with no embedded text layer."""
+    text = ""
+    doc = pymupdf.open(filepath)
+    try:
+        for page in doc:
+            pix = page.get_pixmap(dpi=200)
+            img = Image.open(io.BytesIO(pix.tobytes("png")))
+            text += pytesseract.image_to_string(img) + "\n"
+    finally:
+        doc.close()
+    return text
+
 def extract_pdf_text(filepath: str) -> str:
     text = ""
     try:
@@ -253,6 +270,14 @@ def extract_pdf_text(filepath: str) -> str:
                     text += t + "\n"
     except Exception as e:
         text = f"[PDF read error: {e}]"
+
+    if len(text.strip()) < 50:
+        try:
+            ocr_text = extract_pdf_text_ocr(filepath)
+            if len(ocr_text.strip()) >= 50:
+                text = ocr_text
+        except Exception as e:
+            text += f"\n[OCR error: {e}]"
     return text
 
 # ── Processed-email log ────────────────────────────────────────────────────
