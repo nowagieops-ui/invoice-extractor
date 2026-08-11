@@ -1,7 +1,7 @@
 import os, json, re, imaplib, email, shutil, base64, traceback
 from email.header import decode_header
 from datetime import datetime
-from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for
+from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for, Response, stream_with_context
 import pdfplumber
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -266,10 +266,14 @@ def save_processed(ids: set):
     with open(PROCESSED_LOG, "w") as f:
         json.dump(list(ids), f)
 
-# ── Outlook IMAP fetch ─────────────────────────────────────────────────────
-def fetch_outlook_pdfs(email_addr, password, server, limit, folder="INBOX", sender_filter="", date_from=""):
-    results = []
-    debug = []
+# ── Outlook IMAP fetch + AI extraction, streamed as it happens ────────────
+def process_emails_stream(email_addr, password, server="imap.gmail.com", limit=20, folder="INBOX", sender_filter="", date_from=""):
+    """Generator that yields progress dicts as it works, so the caller can
+    stream results to the browser instead of blocking on one long request."""
+    def log(msg):
+        return {"type": "log", "message": msg}
+
+    yield log("🔌 Connecting to mailbox...")
     mail = imaplib.IMAP4_SSL(server, 993)
     mail.login(email_addr, password)
     mail.select(folder)
@@ -282,33 +286,46 @@ def fetch_outlook_pdfs(email_addr, password, server, limit, folder="INBOX", send
         # Extract just the local part before @ for broader matching
         local_part = sf_clean.split("@")[0] if "@" in sf_clean else sf_clean
         search_parts.append(f'FROM "{local_part}"')
-        debug.append(f"Sender filter: searching for '{local_part}' in From field")
+        yield log(f"Sender filter: searching for '{local_part}' in From field")
     if date_from.strip():
         try:
             dt = datetime.strptime(date_from.strip(), "%Y-%m-%d")
             imap_date = dt.strftime("%d-%b-%Y")
             search_parts.append(f'SINCE {imap_date}')
-            debug.append(f"Date filter: emails since {imap_date}")
+            yield log(f"Date filter: emails since {imap_date}")
         except ValueError:
-            debug.append(f"⚠️ Invalid date format ignored: {date_from}")
+            yield log(f"⚠️ Invalid date format ignored: {date_from}")
 
     search_criteria = " ".join(search_parts) if search_parts else "ALL"
-    debug.append(f"Search criteria: {search_criteria}")
+    yield log(f"Search criteria: {search_criteria}")
 
     _, data = mail.search(None, search_criteria)
     all_ids = data[0].split()
     ids = all_ids[-limit:]
-    debug.append(f"Emails matching search: {len(all_ids)} | Scanning last: {len(ids)}")
+    total = len(ids)
+    yield log(f"Emails matching search: {len(all_ids)} | Scanning last: {total}")
 
     processed = load_processed()
-    debug.append(f"Already processed (skipping): {len(processed)}")
+    yield log(f"Already processed (skipping): {len(processed)}")
 
+    wb, ws = get_or_create_workbook()
+    last_data_row = 4
+    for row in ws.iter_rows(min_row=5):
+        if row[0].value is not None:
+            last_data_row = row[0].row
+    next_row = last_data_row + 1
+
+    summary = []
+    new_processed = set()
     skipped_processed = 0
-    for msg_id in reversed(ids):
+
+    for i, msg_id in enumerate(reversed(ids), 1):
         uid = msg_id.decode()
         if uid in processed:
             skipped_processed += 1
             continue
+
+        yield {"type": "progress", "current": i, "total": total, "message": f"📨 Checking email {i}/{total}..."}
 
         _, msg_data = mail.fetch(msg_id, "(RFC822)")
         raw_bytes = msg_data[0][1]
@@ -317,7 +334,6 @@ def fetch_outlook_pdfs(email_addr, password, server, limit, folder="INBOX", send
         subj_raw, enc = decode_header(msg.get("Subject",""))[0]
         subject = subj_raw.decode(enc or "utf-8") if isinstance(subj_raw, bytes) else str(subj_raw)
         sender  = msg.get("From","")
-        date_str= msg.get("Date","")
 
         pdfs_found = []
         part_info = []
@@ -338,68 +354,35 @@ def fetch_outlook_pdfs(email_addr, password, server, limit, folder="INBOX", send
             elif fn:
                 part_info.append(f"non-pdf file: {fn}")
 
-        if pdfs_found:
-            debug.append(f"✅ From: {sender[:40]} | {subject[:40]} | PDFs: {[p['name'] for p in pdfs_found]}")
-            results.append({
-                "msg_id": uid,
-                "subject": subject,
-                "sender": sender,
-                "date": date_str,
-                "pdfs": pdfs_found
-            })
-        else:
+        if not pdfs_found:
             extra = f" | other parts: {part_info}" if part_info else " | no attachment-like parts at all"
-            debug.append(f"⬜ {subject[:50]} — no PDF attachments{extra}")
+            yield log(f"⬜ {subject[:50]} — no PDF attachments{extra}")
+            continue
 
-    if skipped_processed:
-        debug.append(f"ℹ️ Skipped {skipped_processed} already-processed emails")
-    debug.append(f"📄 Emails with PDFs ready: {len(results)}")
+        yield log(f"✅ From: {sender[:40]} | {subject[:40]} | PDFs: {[p['name'] for p in pdfs_found]}")
 
-    mail.logout()
-    return results, processed, debug
-
-# ── Core processing pipeline ───────────────────────────────────────────────
-def process_emails(email_addr, password, server="imap.gmail.com", limit=20, sender_filter="", date_from=""):
-    emails, processed, debug = fetch_outlook_pdfs(email_addr, password, server, limit, sender_filter=sender_filter, date_from=date_from)
-    wb, ws = get_or_create_workbook()
-
-    # Find next available row
-    last_data_row = 4
-    for row in ws.iter_rows(min_row=5):
-        if row[0].value is not None:
-            last_data_row = row[0].row
-    next_row = last_data_row + 1
-    row_index_counter = [next_row]
-
-    summary = []
-    new_processed = set()
-
-    for em in emails:
-        for pdf_info in em["pdfs"]:
+        for pdf_info in pdfs_found:
+            yield {"type": "progress", "current": i, "total": total, "message": f"📄 Reading {pdf_info['name']}..."}
             pdf_text = extract_pdf_text(pdf_info["path"])
             if len(pdf_text.strip()) < 50:
                 summary.append({
-                    "email": em["subject"],
-                    "file": pdf_info["name"],
-                    "status": "skipped",
+                    "email": subject, "file": pdf_info["name"], "status": "skipped",
                     "reason": "Could not extract text (scanned PDF or empty)"
                 })
+                yield log(f"⚠️ {pdf_info['name']} — could not extract text (scanned PDF or empty)")
                 continue
 
+            yield {"type": "progress", "current": i, "total": total, "message": f"🤖 Asking Gemini to extract {pdf_info['name']}..."}
             try:
                 records = extract_with_ai(pdf_text)
             except Exception as e:
-                summary.append({
-                    "email": em["subject"],
-                    "file": pdf_info["name"],
-                    "status": "error",
-                    "reason": str(e)
-                })
+                summary.append({"email": subject, "file": pdf_info["name"], "status": "error", "reason": str(e)})
+                yield log(f"❌ {pdf_info['name']} — {e}")
                 continue
 
             for rec in records:
                 sn = next_sn(ws)
-                data = {
+                row_data = {
                     "sn": sn,
                     "vendor": rec.get("vendor"),
                     "received_finance": rec.get("received_finance") or rec.get("invoice_date"),
@@ -421,11 +404,11 @@ def process_emails(email_addr, password, server="imap.gmail.com", limit=20, send
                     "finance_date": None,
                     "rejection_reason": rec.get("rejection_reason"),
                 }
-                append_to_tracker(ws, wb, data, row_index_counter[0])
-                row_index_counter[0] += 1
+                append_to_tracker(ws, wb, row_data, next_row)
+                next_row += 1
 
                 summary.append({
-                    "email": em["subject"],
+                    "email": subject,
                     "file": pdf_info["name"],
                     "status": "ok",
                     "sn": sn,
@@ -435,12 +418,20 @@ def process_emails(email_addr, password, server="imap.gmail.com", limit=20, send
                     "audit": f"{rec.get('audit_name','')} — {rec.get('audit_status','')}",
                     "rejection": rec.get("rejection_reason"),
                 })
+                yield log(f"✅ Logged {rec.get('vendor') or 'Unknown vendor'} ({sn})")
 
-        new_processed.add(em["msg_id"])
+        new_processed.add(uid)
+
+    if skipped_processed:
+        yield log(f"ℹ️ Skipped {skipped_processed} already-processed emails")
 
     processed.update(new_processed)
     save_processed(processed)
-    return summary, debug
+    mail.logout()
+
+    ok     = [s for s in summary if s["status"] == "ok"]
+    errors = [s for s in summary if s["status"] != "ok"]
+    yield {"type": "done", "processed": ok, "skipped": errors, "total": len(summary)}
 
 # ─────────────────────────────────────────────────────────────────────────
 # Flask routes
@@ -459,6 +450,9 @@ def index():
 
 @app.route("/fetch-email", methods=["POST"])
 def fetch_email():
+    """Streams newline-delimited JSON progress events as the scan runs, so the
+    browser shows live progress instead of blocking on one long request until
+    it either finishes or the platform kills the connection."""
     payload = request.get_json()
     email_addr    = payload.get("email","").strip()
     password      = payload.get("password","")
@@ -470,19 +464,18 @@ def fetch_email():
     if not email_addr or not password:
         return jsonify({"error": "Email and password required"}), 400
 
-    # Cap limit to avoid timeout on Render free tier (30s request limit)
-    # Each email takes ~0.5s to fetch, so 50 is safe
+    # Cap limit to avoid excessively long scans
     if limit > 200:
         limit = 200
 
-    try:
-        summary, debug = process_emails(email_addr, password, server, limit, sender_filter=sender_filter, date_from=date_from)
-    except Exception as e:
-        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+    def generate():
+        try:
+            for event in process_emails_stream(email_addr, password, server, limit, sender_filter=sender_filter, date_from=date_from):
+                yield json.dumps(event) + "\n"
+        except Exception as e:
+            yield json.dumps({"type": "error", "message": str(e), "trace": traceback.format_exc()}) + "\n"
 
-    ok     = [s for s in summary if s["status"] == "ok"]
-    errors = [s for s in summary if s["status"] != "ok"]
-    return jsonify({"success": True, "processed": ok, "skipped": errors, "total": len(summary), "debug": debug})
+    return Response(stream_with_context(generate()), mimetype="application/x-ndjson")
 
 
 @app.route("/upload", methods=["POST"])

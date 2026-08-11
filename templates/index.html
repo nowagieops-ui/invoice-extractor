@@ -85,6 +85,9 @@
       <div class="grp"><label>Email Address</label><input id="eml" type="email" placeholder="you@company.com" autocomplete="email"/></div>
       <div class="grp"><label>Password / App Password</label><input id="pwd" type="password" placeholder="••••••••" autocomplete="current-password"/></div>
     </div>
+    <label style="display:flex;align-items:center;gap:6px;font-size:.78rem;color:#4a5568;margin-top:4px">
+      <input type="checkbox" id="rmb" style="width:auto"/> Remember email &amp; password on this device
+    </label>
 
     <hr class="divider"/>
     <p class="section-label">Filters (optional)</p>
@@ -159,6 +162,17 @@ async function uploadFile() {
     document.getElementById("upResult").style.display="block";
   } finally { setLoading("upBtn","upSpinner","upLabel",false); }
 }
+// Restore remembered credentials on load
+(function(){
+  const savedEml = localStorage.getItem("inda_email");
+  const savedPwd = localStorage.getItem("inda_pwd");
+  if(savedEml && savedPwd){
+    document.getElementById("eml").value = savedEml;
+    document.getElementById("pwd").value = savedPwd;
+    document.getElementById("rmb").checked = true;
+  }
+})();
+
 async function fetchEmails() {
   const eml=document.getElementById("eml").value.trim();
   const pwd=document.getElementById("pwd").value;
@@ -168,22 +182,73 @@ async function fetchEmails() {
   const dtf=document.getElementById("dtf").value;
   if(!eml||!pwd){alert("Please enter email and password");return;}
   if(parseInt(lim)>200){document.getElementById("lim").value=200; alert("Max 200 emails per scan to avoid timeout. Use the date filter to narrow results instead.");}
+
+  if(document.getElementById("rmb").checked){
+    localStorage.setItem("inda_email", eml);
+    localStorage.setItem("inda_pwd", pwd);
+  } else {
+    localStorage.removeItem("inda_email");
+    localStorage.removeItem("inda_pwd");
+  }
+
   setLoading("fetchBtn","fetchSpinner","fetchLabel",true);
-  const box=document.getElementById("result"); box.style.display="none";
+  const box=document.getElementById("result");
+  box.style.display="block";
+  box.innerHTML = `<div id="liveStatus" style="font-weight:700;margin-bottom:6px;color:#1F4E79">⏳ Connecting...</div>
+    <details class="debug-box" open><summary>🔍 Live progress</summary>
+      <div id="liveLogInner" style="margin-top:6px;max-height:240px;overflow-y:auto"></div>
+    </details>`;
+  const liveStatus = document.getElementById("liveStatus");
+  const liveLogInner = document.getElementById("liveLogInner");
+  const debugLines = [];
+
   try {
     const resp = await fetch("/fetch-email",{
       method:"POST", headers:{"Content-Type":"application/json"},
       body:JSON.stringify({email:eml,password:pwd,server:srv,limit:lim,sender_filter:snd,date_from:dtf})
     });
-    if(!resp.ok && !(resp.headers.get("content-type")||"").includes("application/json")){
-      throw new Error(`Server timed out or errored (HTTP ${resp.status}). Try scanning fewer emails or narrowing the date range.`);
+    if(!resp.ok || !resp.body){
+      let msg = `Server error (HTTP ${resp.status}). Try scanning fewer emails or narrowing the date range.`;
+      try { const j = await resp.json(); if(j.error) msg = j.error; } catch(_){}
+      throw new Error(msg);
     }
-    const j = await resp.json();
-    box.style.display="block";
-    if(j.error){box.innerHTML=`<div class="r-item r-err"><strong>❌ ${j.error}</strong></div>`;return;}
-    const ok=j.processed||[], skip=j.skipped||[], dbg=j.debug||[];
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let finalData = null;
+
+    while(true){
+      const {value, done} = await reader.read();
+      if(done) break;
+      buffer += decoder.decode(value, {stream:true});
+      const lines = buffer.split("\n");
+      buffer = lines.pop();
+      for(const line of lines){
+        if(!line.trim()) continue;
+        let ev;
+        try { ev = JSON.parse(line); } catch(_) { continue; }
+        if(ev.type === "progress"){
+          liveStatus.textContent = `⏳ ${ev.message}`;
+        } else if(ev.type === "log"){
+          debugLines.push(ev.message);
+          const d = document.createElement("div");
+          d.textContent = ev.message;
+          liveLogInner.appendChild(d);
+          liveLogInner.scrollTop = liveLogInner.scrollHeight;
+        } else if(ev.type === "done"){
+          finalData = ev;
+        } else if(ev.type === "error"){
+          throw new Error(ev.message);
+        }
+      }
+    }
+
+    if(!finalData) throw new Error("Scan ended unexpectedly without a result — the connection may have dropped. Try scanning fewer emails.");
+
+    const ok=finalData.processed||[], skip=finalData.skipped||[];
     let html=`<div style="font-weight:700;margin-bottom:10px;color:#276749">✅ ${ok.length} invoice${ok.length!==1?'s':''} extracted | ⚠️ ${skip.length} skipped</div>`;
-    if(dbg.length) html+=`<details class="debug-box"><summary>🔍 What the app saw in your inbox (tap to expand)</summary><div style="margin-top:6px">${dbg.map(d=>`<div>${d}</div>`).join('')}</div></details>`;
+    if(debugLines.length) html+=`<details class="debug-box"><summary>🔍 What the app saw in your inbox (tap to expand)</summary><div style="margin-top:6px">${debugLines.map(d=>`<div>${d}</div>`).join('')}</div></details>`;
     ok.forEach(p=>{
       html+=`<div class="r-item r-ok"><strong>${p.vendor||"Unknown"}</strong>${p.period?` — ${p.period}`:""}<br><span style="font-size:.76rem;color:#718096">${p.file}</span>
       <div class="approvals">
@@ -194,7 +259,7 @@ async function fetchEmails() {
     skip.forEach(p=>{ html+=`<div class="r-item r-err"><strong>⚠️ ${p.file}</strong><br><span style="font-size:.78rem">${p.reason}</span></div>`; });
     box.innerHTML=html;
   } catch(e){
-    box.innerHTML=`<div class="r-item r-err">❌ ${e.message}</div>`;
+    box.innerHTML += `<div class="r-item r-err">❌ ${e.message}</div>`;
     box.style.display="block";
   } finally { setLoading("fetchBtn","fetchSpinner","fetchLabel",false); }
 }
