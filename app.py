@@ -301,6 +301,12 @@ def process_emails_stream(email_addr, password, server="imap.gmail.com", limit=2
     yield log("🔌 Connecting to mailbox...")
     mail = imaplib.IMAP4_SSL(server, 993)
     mail.login(email_addr, password)
+    if "gmail" in server.lower() and folder == "INBOX":
+        # Gmail's IMAP "INBOX" is only mail still carrying the Inbox label —
+        # anything archived after being read/filed is invisible to it, even
+        # though it still shows up in Gmail's own web search. All Mail covers
+        # both.
+        folder = '"[Gmail]/All Mail"'
     mail.select(folder)
 
     # Build IMAP search criteria

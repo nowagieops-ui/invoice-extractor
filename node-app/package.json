@@ -1,0 +1,17 @@
+{
+  "name": "invoice-extractor-node",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Phase 0 environment smoke test for Hostinger Node.js Selector — verifies port/env/disk/IMAP/Gemini access before the real rewrite starts.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "@google/genai": "^0.14.0"
+  }
+}
