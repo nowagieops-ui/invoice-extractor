@@ -2,7 +2,7 @@
   "name": "invoice-extractor-node",
   "version": "0.1.0",
   "private": true,
-  "description": "Phase 0 environment smoke test for Hostinger Node.js Selector — verifies port/env/disk/IMAP/Gemini access before the real rewrite starts.",
+  "description": "Node.js rewrite of the INDA invoice tracker for Hostinger's Node.js Selector — Gmail API scanning (IMAP is blocked/intercepted on this host), background-job scans, Gemini extraction, Excel tracker.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "express": "^4.19.2",
-    "@google/genai": "^0.14.0"
+    "@google/genai": "^0.14.0",
+    "googleapis": "^144.0.0"
   }
 }
