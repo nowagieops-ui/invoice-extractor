@@ -1,6 +1,7 @@
 const express = require("express");
 const debugRoutes = require("./src/routes/debug");
 const authRoutes = require("./src/routes/auth");
+const scanRoutes = require("./src/routes/scan");
 const tokenStore = require("./src/services/tokenStore");
 
 const app = express();
@@ -27,5 +28,6 @@ app.get("/", (req, res) => {
 
 app.use("/debug", debugRoutes);
 app.use("/auth", authRoutes);
+app.use("/scan", scanRoutes);
 
 module.exports = app;

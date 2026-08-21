@@ -1,9 +1,11 @@
 const app = require("./app");
 const { PORT } = require("./src/config");
+const jobStore = require("./src/services/jobStore");
 
-// On process boot, reconcile any orphaned "running" job state left behind
-// by a previous process instance. Not needed yet in Phase 0 (no real jobs
-// exist), but this is where Phase 2's restart-resilience check will live.
+// Any job still "running"/"starting" on disk died with whatever process
+// instance was handling it before this boot - mark it as a truthful
+// terminal error (not left hanging) and release the single-job lock.
+jobStore.reconcileOrphanedJobs();
 
 app.listen(PORT, () => {
   console.log(`invoice-extractor-node listening on port ${PORT}`);

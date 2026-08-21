@@ -13,6 +13,8 @@
   "dependencies": {
     "express": "^4.19.2",
     "@google/genai": "^0.14.0",
-    "googleapis": "^144.0.0"
+    "googleapis": "^144.0.0",
+    "pdf-parse": "^1.1.1",
+    "exceljs": "^4.4.0"
   }
 }
