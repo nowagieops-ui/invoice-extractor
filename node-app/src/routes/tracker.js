@@ -6,7 +6,10 @@ const excelTracker = require("../services/excelTracker");
 const { EXCEL_FILE } = require("../config");
 
 const router = express.Router();
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
+// Higher limit than the PDF upload's 20MB - a tracker with years of rows,
+// merged cells, and conditional formatting can get noticeably larger than
+// a typical single-invoice PDF.
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
 // Attach a tracker (a previous backup, or one already in use) as the
 // ongoing target future scans append to - not just a one-time restore.
