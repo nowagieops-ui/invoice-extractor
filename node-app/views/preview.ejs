@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>INDA Invoice Tracker — Data</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header>
+  <h1>📋 INDA Invoice Tracker</h1>
+  <a href="/download" class="badge" style="text-decoration:none">⬇ Download Excel</a>
+</header>
+<nav>
+  <a href="/">Home</a>
+  <a href="/preview" class="active">View Data</a>
+  <a href="/download">Download</a>
+</nav>
+
+<div class="wrap" style="max-width: 100%; padding: 20px 24px;">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <div><%= rows.length %> invoice<%= rows.length !== 1 ? 's' : '' %></div>
+    <a href="/" class="secondary" style="text-decoration:none;padding:8px 14px;border:1px solid #1F4E79;border-radius:6px;color:#1F4E79;font-size:0.85rem">+ Add More</a>
+  </div>
+
+  <% if (rows.length === 0) { %>
+    <div class="card">No invoices tracked yet.</div>
+  <% } else { %>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><% headers.forEach(h => { %><th><%= h %></th><% }) %></tr>
+        </thead>
+        <tbody>
+          <% rows.forEach(row => { %>
+            <tr><% row.forEach(cell => { %><td><%= cell == null ? '' : cell %></td><% }) %></tr>
+          <% }) %>
+        </tbody>
+      </table>
+    </div>
+  <% } %>
+</div>
+</body>
+</html>

@@ -1,10 +1,9 @@
 const jobStore = require("./jobStore");
 const googleAuth = require("./googleAuth");
 const gmailClient = require("./gmailClient");
-const pdfText = require("./pdfText");
-const gemini = require("./geminiClient");
 const excelTracker = require("./excelTracker");
 const dedup = require("./dedup");
+const invoicePipeline = require("./invoicePipeline");
 const tokenStore = require("./tokenStore");
 const { MAX_SCAN_LIMIT } = require("../config");
 
@@ -142,17 +141,11 @@ async function run(jobId, params) {
           continue;
         }
 
-        const { text, needsMultimodalFallback } = await pdfText.extractPdfText(buffer);
+        job = jobStore.setProgress(job, i + 1, total, `🤖 Extracting ${part.filename}...`);
 
-        let records;
+        let outcome;
         try {
-          if (needsMultimodalFallback) {
-            job = jobStore.setProgress(job, i + 1, total, `🤖 Asking Gemini to read ${part.filename} (scanned)...`);
-            records = await gemini.extractFromPdfBytes(buffer);
-          } else {
-            job = jobStore.setProgress(job, i + 1, total, `🤖 Asking Gemini to extract ${part.filename}...`);
-            records = await gemini.extractFromText(text);
-          }
+          outcome = await invoicePipeline.extractAndAppend(buffer, { wb, ws, index, nextRow });
         } catch (err) {
           summary.push({ email: msg.subject, file: part.filename, status: "error", reason: err.message });
           job.counts.errors++;
@@ -160,63 +153,28 @@ async function run(jobId, params) {
           continue;
         }
 
-        for (const rec of records) {
-          const dupRow = index.find(rec.vendor, rec.invoice_number, rec.invoice_period);
-          if (dupRow) {
-            summary.push({
-              email: msg.subject,
-              file: part.filename,
-              status: "skipped",
-              reason: `Duplicate of existing row ${dupRow}`,
-            });
-            job.counts.skippedDuplicate++;
-            job = jobStore.appendLog(job, `⏭️ ${rec.vendor || "Unknown"} — already in tracker (row ${dupRow}), skipped`);
-            continue;
-          }
+        nextRow = outcome.nextRow;
 
-          const sn = excelTracker.nextSn(ws);
-          const rowData = {
-            sn,
-            vendor: rec.vendor,
-            receivedFinance: rec.received_finance || rec.invoice_date,
-            receivedCoordinator: null,
-            poSo: `${rec.invoice_number || ""} | ${rec.po_so || ""}`,
-            bhRecv: rec.budget_holder_date,
-            bhDate: rec.budget_holder_date,
-            bhStatus: rec.budget_holder_status || "PENDING",
-            auditRecv: rec.audit_date,
-            auditDate: rec.audit_date,
-            auditStatus: rec.audit_status || "PENDING",
-            ccRecv: rec.cost_control_date,
-            ccDate: rec.cost_control_date,
-            ccStatus: rec.cost_control_status || "PENDING",
-            gmRecv: rec.gm_finance_date,
-            gmDate: rec.gm_finance_date,
-            gmStatus: rec.gm_finance_status || "PENDING",
-            financeName: null,
-            financeDate: null,
-            rejectionReason: rec.rejection_reason,
-            invoiceNumber: rec.invoice_number,
-            invoicePeriod: rec.invoice_period,
-          };
+        for (const s of outcome.skipped) {
+          summary.push({ email: msg.subject, file: part.filename, status: "skipped", reason: s.reason });
+          job.counts.skippedDuplicate++;
+          job = jobStore.appendLog(job, `⏭️ ${s.vendor || "Unknown"} — ${s.reason}`);
+        }
 
-          await excelTracker.appendRow(wb, ws, rowData, nextRow);
-          index.add(rec.vendor, rec.invoice_number, rec.invoice_period, nextRow);
-          nextRow++;
-
+        for (const rec of outcome.logged) {
           summary.push({
             email: msg.subject,
             file: part.filename,
             status: "ok",
-            sn,
+            sn: rec.sn,
             vendor: rec.vendor,
-            period: rec.invoice_period,
-            budget_holder: `${rec.budget_holder_name || ""} — ${rec.budget_holder_status || ""}`,
-            audit: `${rec.audit_name || ""} — ${rec.audit_status || ""}`,
-            rejection: rec.rejection_reason,
+            period: rec.period,
+            budget_holder: rec.budget_holder,
+            audit: rec.audit,
+            rejection: rec.rejection,
           });
           job.counts.logged++;
-          job = jobStore.appendLog(job, `✅ Logged ${rec.vendor || "Unknown vendor"} (${sn})`);
+          job = jobStore.appendLog(job, `✅ Logged ${rec.vendor || "Unknown vendor"} (${rec.sn})`);
         }
       }
 

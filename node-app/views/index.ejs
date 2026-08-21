@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>INDA Invoice Tracker</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header>
+  <h1>📋 INDA Invoice Tracker</h1>
+  <span class="badge"><%= rowCount %> invoice<%= rowCount !== 1 ? 's' : '' %></span>
+</header>
+<nav>
+  <a href="/" class="active">Home</a>
+  <a href="/preview">View Data</a>
+  <a href="/download">Download</a>
+</nav>
+
+<div class="wrap">
+  <div class="stats">
+    <div class="stat"><div class="num" id="statTracked"><%= rowCount %></div><div class="lbl">Tracked</div></div>
+    <div class="stat"><div class="num">4</div><div class="lbl">Stages</div></div>
+    <div class="stat"><div class="num">AI</div><div class="lbl">Powered</div></div>
+  </div>
+
+  <div class="card">
+    <h2>📧 Scan From Email</h2>
+    <div id="accountRow" class="account-row disconnected">
+      <span id="accountStatus">Checking connection…</span>
+      <a id="accountAction" class="btn-link" href="/auth/google">Connect Google Account</a>
+    </div>
+
+    <div id="scanFormWrap">
+      <label>Sender Email Filter (optional)</label>
+      <input type="email" id="snd" placeholder="ben.okoh@belemagroup.com.ng">
+      <div class="row2">
+        <div>
+          <label>Emails From Date (optional)</label>
+          <input type="date" id="dtf">
+        </div>
+        <div>
+          <label>Max Emails to Scan (max 500)</label>
+          <input type="number" id="lim" value="50" min="1" max="500">
+        </div>
+      </div>
+      <button class="primary" id="scanBtn" onclick="startScan()">
+        <span id="scanSpinner" style="display:none">⏳</span>
+        <span id="scanLabel">🔍 Scan & Extract</span>
+      </button>
+    </div>
+
+    <div id="scanResult" class="result"></div>
+  </div>
+
+  <div class="card">
+    <h2>📎 Manual PDF Upload</h2>
+    <p style="font-size:0.8rem;color:#718096;margin-top:-6px">Upload a single invoice PDF to extract and log it directly.</p>
+    <div class="dz" id="dz">
+      <input type="file" id="fi" accept=".pdf" style="display:none">
+      <p id="dzText">Tap to choose a PDF<br><span style="font-size:0.75rem">PDF only · max 20 MB</span></p>
+    </div>
+    <button class="primary" id="upBtn" onclick="uploadFile()" disabled>Extract & Log</button>
+    <div id="upResult" class="result"></div>
+  </div>
+
+  <div class="card">
+    <h2>📊 Attach Tracker</h2>
+    <p style="font-size:0.8rem;color:#718096;margin-top:-6px">
+      Attach the Excel tracker you want new invoices appended to going forward — for example, one restored
+      from a backup, or one already in use. It must have the same INVOICE sheet layout the app produces.
+    </p>
+    <input type="file" id="trFile" accept=".xlsx">
+    <button class="primary" id="trBtn" onclick="restoreTracker()" disabled style="margin-top:10px">Attach Tracker</button>
+    <div id="trResult" class="result"></div>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>

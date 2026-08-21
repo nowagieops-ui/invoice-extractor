@@ -228,13 +228,48 @@ function rowCount(ws) {
   return Math.max(0, lastDataRow(ws) - (DATA_START_ROW - 1));
 }
 
+// Read-only stat check for page loads - does NOT create the tracker file
+// as a side effect of just checking the count (unlike getOrCreateWorkbook),
+// same behavior as the original app's index route.
+async function getRowCountIfExists() {
+  if (!fs.existsSync(EXCEL_FILE)) return 0;
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.readFile(EXCEL_FILE);
+  const ws = wb.getWorksheet(SHEET_NAME);
+  return ws ? rowCount(ws) : 0;
+}
+
+// Read-only data dump for /preview - also does not create the file.
+async function getAllRowsIfExists() {
+  if (!fs.existsSync(EXCEL_FILE)) return [];
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.readFile(EXCEL_FILE);
+  const ws = wb.getWorksheet(SHEET_NAME);
+  if (!ws) return [];
+  const rows = [];
+  for (let r = DATA_START_ROW; r <= ws.rowCount; r++) {
+    const values = [];
+    let hasValue = false;
+    for (let c = 1; c <= COLUMN_HEADERS.length; c++) {
+      const v = ws.getCell(r, c).value;
+      if (v != null) hasValue = true;
+      values.push(v);
+    }
+    if (hasValue) rows.push(values);
+  }
+  return rows;
+}
+
 module.exports = {
   SHEET_NAME,
   DATA_START_ROW,
   COL,
+  COLUMN_HEADERS,
   getOrCreateWorkbook,
   writeHeaders,
   lastDataRow,
+  getRowCountIfExists,
+  getAllRowsIfExists,
   nextSn,
   appendRow,
   rowCount,
